@@ -76,17 +76,6 @@
       color: var(--text-muted);
     }
 
-    .pill {
-      padding: 0.25rem 0.8rem;
-      border-radius: 999px;
-      background: rgba(15, 23, 42, 0.9);
-      border: 1px solid rgba(148, 163, 184, 0.4);
-      font-size: 0.7rem;
-      text-transform: uppercase;
-      letter-spacing: 0.09em;
-      color: var(--text-muted);
-    }
-
     .graphic-wrapper {
       display: flex;
       justify-content: center;
@@ -95,8 +84,8 @@
 
     .circle {
       position: relative;
-      width: 190px;
-      height: 190px;
+      width: 250px;
+      height: 250px;
       border-radius: 50%;
       background:
         radial-gradient(circle at 30% 0%, rgba(255, 255, 255, 0.12), transparent 60%),
@@ -127,23 +116,13 @@
     }
 
     .days {
-      font-size: 3.8rem;
+      font-size: 3rem;
       font-weight: 700;
-      line-height: 1;
-      display: flex;
-      align-items: baseline;
-      justify-content: center;
-      gap: 0.35em;
-    }
-
-    .days span {
-      font-size: 1.4rem;
-      color: var(--text-muted);
-    }
-
-    .days small {
-      font-size: 1.2rem;
-      color: var(--text-muted);
+      line-height: 1.1;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
     }
 
     .circle-label {
@@ -180,12 +159,6 @@
       font-weight: 500;
     }
 
-    .hint {
-      margin-top: 1.2rem;
-      font-size: 0.75rem;
-      color: var(--text-muted);
-    }
-
     .status {
       margin-top: 0.6rem;
       font-size: 0.8rem;
@@ -205,11 +178,11 @@
         padding: 1.7rem 1.4rem 2.1rem;
       }
       .circle {
-        width: 160px;
-        height: 160px;
+        width: 180px;
+        height: 180px;
       }
       .days {
-        font-size: 3.2rem;
+        font-size: 2.6rem;
       }
     }
   </style>
@@ -218,17 +191,15 @@
   <div class="card">
     <div class="card-inner">
       <div class="title-row">
-        <h1>Days since last X</h1>
-        <div class="pill">Global Counter</div>
+        <h1>Days since last</h1>
       </div>
 
       <div class="graphic-wrapper">
         <div class="circle">
           <div class="circle-inner">
-            <div class="days" id="days">
-              0<span>d</span><small>0h</small>
-            </div>
-            <div class="circle-label">Days Clear</div>
+            <!-- dd:hh:mm format -->
+            <div class="days" id="days">00:00:00</div>
+            <div class="circle-label">DD : HH : MM</div>
           </div>
         </div>
       </div>
@@ -244,28 +215,30 @@
         </div>
       </div>
 
-      <div class="hint">
-        Read-only view. Resets are done by an admin via a protected API.
-      </div>
-
       <div class="status" id="status"></div>
     </div>
   </div>
 
   <script>
     const API_URL = "/api/counter";
-    const MS_PER_HOUR = 1000 * 60 * 60;
+    const MS_PER_MIN = 1000 * 60;
+    const MS_PER_HOUR = MS_PER_MIN * 60;
     const MS_PER_DAY = MS_PER_HOUR * 24;
 
-    function calculateDurationSince(lastResetIso) {
-      const reset = new Date(lastResetIso);
-      const now = new Date();
+    let lastResetDate = null;
+    let tickerStarted = false;
 
+    function calculateDurationSince(reset) {
+      const now = new Date();
       const diffMs = Math.max(0, now - reset);
       const days = Math.floor(diffMs / MS_PER_DAY);
       const hours = Math.floor((diffMs % MS_PER_DAY) / MS_PER_HOUR);
+      const minutes = Math.floor((diffMs % MS_PER_HOUR) / MS_PER_MIN);
+      return { days, hours, minutes };
+    }
 
-      return { days, hours, reset };
+    function pad2(n) {
+      return n.toString().padStart(2, "0");
     }
 
     function formatDateTime(date) {
@@ -288,13 +261,22 @@
       el.className = "status " + (msg ? type : "");
     }
 
-    function renderCounter({ days, hours, reset }) {
-      document.getElementById("days").innerHTML =
-        days + "<span>d</span><small>" + hours + "h</small>";
-      document.getElementById("last-reset").textContent = formatDateTime(reset);
+    function renderNow() {
+      if (!lastResetDate) return;
+      const { days, hours, minutes } = calculateDurationSince(lastResetDate);
+      const el = document.getElementById("days");
+      el.textContent = `${pad2(days)}:${pad2(hours)}:${pad2(minutes)}`;
+    }
 
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "Local time";
-      document.getElementById("tz-label").textContent = tz;
+    function startTicker() {
+      if (tickerStarted || !lastResetDate) return;
+      tickerStarted = true;
+
+      // Render immediately
+      renderNow();
+
+      // Update every minute
+      setInterval(renderNow, MS_PER_MIN);
     }
 
     async function fetchState() {
@@ -304,8 +286,16 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
 
-        const state = calculateDurationSince(data.lastReset);
-        renderCounter(state);
+        lastResetDate = new Date(data.lastReset);
+        document.getElementById("last-reset").textContent = formatDateTime(lastResetDate);
+
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "Local time";
+        document.getElementById("tz-label").textContent = tz;
+
+        // First render + start live updates
+        renderNow();
+        startTicker();
+
         setStatus("");
       } catch (err) {
         console.error(err);
