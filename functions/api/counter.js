@@ -1,10 +1,11 @@
 // functions/api/counter.js
 
-const KV_KEY = "last_reset";
+const LAST_RESET_KEY = "last_reset";
+const HISTORY_KEY = "reset_history"; // JSON array of ISO timestamps
+const HISTORY_LIMIT = 50;
 
 export async function onRequest({ request, env }) {
   try {
-    // Check KV binding
     if (!env.COUNTER_KV) {
       return new Response("KV binding COUNTER_KV is not configured.", {
         status: 500,
@@ -12,16 +13,36 @@ export async function onRequest({ request, env }) {
     }
 
     if (request.method === "GET") {
-      let stored = await env.COUNTER_KV.get(KV_KEY);
-      if (!stored) {
+      // Ensure last_reset exists
+      let lastReset = await env.COUNTER_KV.get(LAST_RESET_KEY);
+      if (!lastReset) {
         const now = new Date().toISOString();
-        await env.COUNTER_KV.put(KV_KEY, now);
-        stored = now;
+        await env.COUNTER_KV.put(LAST_RESET_KEY, now);
+        lastReset = now;
+
+        // Initialize history with this first reset
+        await env.COUNTER_KV.put(HISTORY_KEY, JSON.stringify([now]));
       }
 
-      return new Response(JSON.stringify({ lastReset: stored }), {
-        headers: { "Content-Type": "application/json" },
-      });
+      // Load history (backwards compatible)
+      let historyRaw = await env.COUNTER_KV.get(HISTORY_KEY);
+      let history;
+      if (!historyRaw) {
+        history = [lastReset];
+        await env.COUNTER_KV.put(HISTORY_KEY, JSON.stringify(history));
+      } else {
+        try {
+          history = JSON.parse(historyRaw);
+          if (!Array.isArray(history)) history = [lastReset];
+        } catch {
+          history = [lastReset];
+        }
+      }
+
+      return new Response(
+        JSON.stringify({ lastReset, history }),
+        { headers: { "Content-Type": "application/json" } }
+      );
     }
 
     if (request.method === "POST") {
@@ -42,12 +63,29 @@ export async function onRequest({ request, env }) {
       }
 
       const now = new Date().toISOString();
-      await env.COUNTER_KV.put(KV_KEY, now);
+      await env.COUNTER_KV.put(LAST_RESET_KEY, now);
 
-      return new Response(JSON.stringify({ lastReset: now }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      // Update history
+      let historyRaw = await env.COUNTER_KV.get(HISTORY_KEY);
+      let history;
+      try {
+        history = historyRaw ? JSON.parse(historyRaw) : [];
+        if (!Array.isArray(history)) history = [];
+      } catch {
+        history = [];
+      }
+
+      history.unshift(now);                 // newest first
+      history = history.slice(0, HISTORY_LIMIT);
+      await env.COUNTER_KV.put(HISTORY_KEY, JSON.stringify(history));
+
+      return new Response(
+        JSON.stringify({ lastReset: now, history }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
     }
 
     return new Response("Method not allowed", { status: 405 });
